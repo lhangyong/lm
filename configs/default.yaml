@@ -1,0 +1,51 @@
+# PatchCore 质检系统配置
+# 优先级：命令行参数 > 本文件 > 代码默认值
+# 根目录可用环境变量 PATCHCORE_DATA_ROOT / PATCHCORE_OUTPUT_ROOT 覆盖。
+#
+# 默认模型 = 消融后的最优组合（见 README「消融实验」）：
+#   resnet18 + layer2/layer3 + 3x3 邻域聚合 + 256 分辨率 + 不标准化
+
+data:
+  dataset: "metal_nut"
+
+model:
+  backbone: "resnet18"          # resnet18（快）| wide_resnet50_2（论文配置，显存需求高）
+  layers: ["layer2", "layer3"]
+  image_size: 256               # 缩放尺寸；512 反而变差且慢 9 倍
+  center_crop: 256
+  auto_crop: false              # 是否先按前景包围盒裁剪成正方形
+  local_pool: true              # 3x3 邻域平均：对划痕这类局部纹理缺陷很关键
+  normalize: false              # 特征逐维标准化：本数据集上会严重损失精度
+  coreset_ratio: 0.01           # coreset 采样比例
+  max_coreset: 6000
+  n_neighbors: 1                # kNN 的 k
+  gaussian_sigma: 4.0
+  batch_size: 8
+  num_workers: 0
+  device: "auto"                # auto | cuda | cpu
+
+report:
+  line_name: "金属螺母（metal_nut）产线 / 视觉质检工位 A2"
+
+  # —— 判级（OK / NG）——
+  # NG ⇔ 异常分数 ≥ 图像阈值 且 存在「局部显著」的异常区域；
+  # image_score_threshold 只是兜底值，实际使用训练集正常样本自动标定的阈值
+  # （见 outputs/models/*.calibration.json）
+  image_score_threshold: 0.5
+  local_significance: 0.60      # 核心显著性门槛（区域峰值 / 本图最异常点）
+
+  # —— 严重度分级（按缺陷区域面积占比）——
+  defect_ratio_threshold: 0.002 # 异常面积下限，低于视为噪声
+  max_area_ratio: 0.10          # ≥ 10% 判 Major（显著）
+  min_area_ratio: 0.02          # ≥ 2% 判 Minor（轻微），其余为 Trace
+
+  # —— 缺陷区域提取 ——
+  region_core_percentile: 88.0  # 归一化热力图上的核心阈值百分位
+
+agent:
+  provider: "auto"              # deepseek | openai | qwen | ollama | none
+  model: ""                     # 空 = 用 provider 默认模型（如 deepseek-chat）
+  temperature: 0.1
+  max_tool_rounds: 6
+  recursion_limit: 24
+  enable_llm: true

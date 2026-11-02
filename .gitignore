@@ -1,0 +1,20 @@
+# ===== Python 运行缓存 =====
+__pycache__/
+*.pyc
+*.pyo
+
+# ===== 项目内运行依赖（conda 环境只读，统一装在本目录）=====
+.deps/
+
+# ===== 训练 / 评估产物（可用 train.bat / eval.bat 重新生成）=====
+outputs/
+
+# ===== 大数据集（MVTec AD 公开来源，体积大不入库，见 README 数据许可）=====
+metal_nut/
+
+# ===== IDE / 系统杂项 =====
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db
