@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PatchCore 缺陷检测 · 工作台</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#0f1115; --panel:#171a21; --panel2:#11141a; --line:#262b36; --muted:#9aa0a6; --text:#e6e6e6;
+    --accent:#2563eb; --ok:#3ddc84; --ng:#ff6b6b;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; }
+  body{ margin:0; font-family:'Segoe UI','Microsoft YaHei',system-ui,sans-serif; background:var(--bg);
+        color:var(--text); line-height:1.5; overflow:hidden; }
+
+  /* ---------- 整体：单屏工作台 ---------- */
+  .app{ height:100vh; display:grid; grid-template-rows:auto 1fr; }
+  .topbar{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:10px 16px;
+           background:var(--panel); border-bottom:1px solid var(--line); }
+  .brand{ font-size:17px; font-weight:600; margin-right:4px; }
+  .brand small{ color:var(--muted); font-weight:400; font-size:12px; margin-left:8px; }
+  .badge{ padding:2px 10px; border-radius:10px; font-size:12px; background:#1d4ed8; color:#fff; }
+  .badge.off{ background:#374151; }
+  .status{ font-size:12.5px; color:var(--muted); }
+  .status b{ color:#dbe3ee; font-weight:600; }
+  .grow{ flex:1; }
+
+  button{ font:inherit; padding:7px 13px; border-radius:8px; border:1px solid #2f3644;
+          background:#1f2530; color:var(--text); cursor:pointer; white-space:nowrap; }
+  button:hover{ background:#2a3140; }
+  button.primary{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button.primary:hover{ background:#1d4ed8; }
+  button:disabled{ opacity:.4; cursor:not-allowed; }
+  button.icon{ padding:6px 9px; }
+  label.switch{ display:flex; align-items:center; gap:6px; font-size:12.5px; color:#c4c9d1; cursor:pointer; }
+  .hint{ font-size:12px; color:#7d8590; }
+  .err{ background:#3a1518; border:1px solid #7f1d1d; color:#fecaca; padding:8px 12px; border-radius:8px;
+        font-size:13px; }
+  a{ color:#60a5fa; }
+
+  /* ---------- 主区域：左侧选图 / 右侧结果 ---------- */
+  .main{ display:grid; grid-template-columns: 320px 1fr; min-height:0; }
+  @media (max-width: 900px){ .main{ grid-template-columns: 1fr; grid-template-rows:auto 1fr; } }
+
+  /* 左侧 */
+  .side{ border-right:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column;
+         min-height:0; padding:12px; gap:10px; }
+  #drop{ border:2px dashed #374151; border-radius:10px; padding:18px 10px; text-align:center;
+         color:var(--muted); cursor:pointer; transition:.15s; background:var(--panel2); font-size:13px; }
+  #drop:hover, #drop.over{ border-color:var(--accent); color:#dbeafe; background:#111827; }
+  #drop .ico{ font-size:26px; }
+  .thumbs-title{ font-size:12px; color:var(--muted); display:flex; justify-content:space-between; align-items:center; }
+  .samples{ flex:1; min-height:60px; overflow-y:auto; display:grid; grid-template-columns:repeat(3,1fr);
+            gap:6px; padding-right:2px; }
+  .samples img{ width:100%; aspect-ratio:1; object-fit:cover; border-radius:7px; border:2px solid transparent;
+                cursor:pointer; opacity:.85; transition:.12s; }
+  .samples img:hover{ border-color:var(--accent); opacity:1; }
+  .samples img.sel{ border-color:var(--accent); opacity:1; }
+
+  /* 右侧：结果（一屏全展示：头部 + 2x2 视图 + 详情双栏） */
+  .resultArea{ display:grid; grid-template-rows:auto 1fr auto; min-height:0; min-width:0; }
+  .resultHead{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 14px;
+               background:var(--panel); border-bottom:1px solid var(--line); }
+  .verdict{ font-size:22px; font-weight:800; letter-spacing:.5px; }
+  .v-ng{ color:var(--ng); } .v-ok{ color:var(--ok); }
+  .kv{ display:flex; gap:16px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); }
+  .kv b{ color:#dbe3ee; font-weight:600; font-size:13px; }
+  .chip{ display:inline-block; padding:0 8px; border-radius:7px; font-size:11.5px; color:#fff; }
+  .chip.Major{ background:#e5484d; } .chip.Minor{ background:#f5a524; } .chip.Trace{ background:#0090ff; }
+  .chip.None{ background:#6b7280; }
+
+  /* 2x2 视图网格：四种视图同时显示 */
+  .grid4{ display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:8px;
+          min-height:0; padding:8px 10px; position:relative; }
+  .cell{ background:var(--panel2); border:1px solid var(--line); border-radius:10px; min-height:0;
+         display:flex; flex-direction:column; overflow:hidden; }
+  .cell .cellTitle{ flex:0 0 auto; font-size:12px; color:var(--muted); text-align:center; padding:4px 0 0; }
+  .cell .cellBody{ flex:1; min-height:0; display:flex; align-items:center; justify-content:center;
+                   position:relative; }
+  .cell img, .cell svg{ max-width:100%; max-height:100%; object-fit:contain; display:block; }
+  .cell .cap{ flex:0 0 auto; color:#6b7280; font-size:10.5px; text-align:center; padding:0 6px 3px;
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .empty{ grid-column:1/-1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+          color:#6b7280; font-size:13px; text-align:center; }
+  .spinner{ position:absolute; inset:0; display:none; align-items:center; justify-content:center; gap:10px;
+            background:rgba(11,13,17,.65); z-index:3; color:#93c5fd; font-size:14px; }
+  .spinner.on{ display:flex; }
+  .dot{ width:15px; height:15px; border:2px solid var(--accent); border-top-color:transparent;
+        border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+
+  /* 底部详情双栏：缺陷区域表 / 智能体解读，固定展开 */
+  .detailRow{ border-top:1px solid var(--line); background:var(--panel); display:grid;
+              grid-template-columns:minmax(0,42%) minmax(0,1fr); gap:0; min-height:0; }
+  .dpanel{ min-height:0; display:flex; flex-direction:column; }
+  .dpanel + .dpanel{ border-left:1px solid var(--line); }
+  .dhead{ flex:0 0 auto; display:flex; align-items:center; gap:10px; padding:5px 12px; font-size:12.5px;
+          color:var(--muted); border-bottom:1px solid var(--line); }
+  .dhead b{ color:#dbe3ee; }
+  .dhead .reason{ color:#9aa0a6; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dbody{ flex:1; min-height:0; overflow:auto; padding:8px 12px 10px; }
+  table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  th,td{ text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); }
+  th{ color:var(--muted); font-weight:500; }
+  pre{ white-space:pre-wrap; font-size:12.5px; font-family:'Cascadia Mono',Consolas,monospace;
+       line-height:1.6; margin:0; background:var(--panel2); padding:10px 12px; border-radius:8px; }
+
+  ::-webkit-scrollbar{ width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb{ background:#2f3644; border-radius:4px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 顶部工具栏 -->
+  <div class="topbar">
+    <div class="brand">PatchCore 缺陷检测<small>一屏全景质检工作台</small></div>
+    <span id="llmBadge" class="badge off">大模型：…</span>
+    <span class="status" id="statusCard">正在加载模型…</span>
+    <span class="grow"></span>
+    <label class="switch"><input type="checkbox" id="chkLLM"> 大模型解读</label>
+    <button class="primary" id="btnDetect" disabled>检测 (Ctrl+Enter)</button>
+    <button id="btnRandom">🎲 随机</button>
+    <button id="btnExport" disabled>导出报告</button>
+    <button id="btnClear" class="icon" title="清除">⟲</button>
+  </div>
+
+  <div class="main">
+    <!-- 左：选图 -->
+    <aside class="side">
+      <div id="drop">
+        <div class="ico">🖼️</div>
+        <div style="margin-top:4px">拖放图片 / 点击选择 / Ctrl+V</div>
+        <div class="hint">png · jpg · bmp · tif</div>
+      </div>
+      <input type="file" id="fileInput" accept="image/*" hidden>
+      <div class="thumbs-title"><span>测试集示例 · 点击即检测</span><span id="sampleCount"></span></div>
+      <div class="samples" id="samples"></div>
+      <div id="error"></div>
+    </aside>
+
+    <!-- 右：结果（一屏全展示） -->
+    <section class="resultArea">
+      <div class="resultHead">
+        <span class="verdict" id="verdict">—</span>
+        <span class="chip None" id="severity">None</span>
+        <div class="kv">
+          <span>分数 <b id="score">—</b> / 阈值 <b id="thr">—</b></span>
+          <span>区域 <b id="nreg">—</b></span>
+          <span>耗时 <b id="ms">—</b></span>
+          <span id="fileName"></span>
+        </div>
+        <span class="grow"></span>
+      </div>
+
+      <div class="grid4" id="grid4">
+        <div class="empty" id="emptyView">还没有检测结果<br><span class="hint">从左侧拖入图片或点击示例，然后点「检测」</span></div>
+        <div class="spinner" id="spinner"><div class="dot"></div><span>正在推理…</span></div>
+      </div>
+
+      <div class="detailRow" id="detailRow">
+        <div class="dpanel">
+          <div class="dhead"><b>缺陷区域表</b><span class="reason" id="reason"></span></div>
+          <div class="dbody" id="regionBox">
+            <div class="hint">检测后在这里显示缺陷区域表。</div>
+          </div>
+        </div>
+        <div class="dpanel">
+          <div class="dhead"><b>智能体解读</b><span id="agentNote"></span></div>
+          <div class="dbody" id="analysisBox">
+            <div class="hint">检测后在这里显示智能体解读。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let selectedFile = null, selectedPath = null, lastResult = null;
+
+/* ---------------- 初始化 ---------------- */
+async function init(){
+  const r = await fetch('/api/status').then(r => r.json()).catch(e => ({ok:false, error:String(e)}));
+  if (r.ok){
+    $('statusCard').innerHTML = `模型 <b>${r.model}</b> · ${r.device} · 阈值 <b>${r.threshold}</b>（${r.threshold_source}）`;
+    const llm = $('llmBadge');
+    if (r.llm && r.llm.enabled){ llm.textContent = `大模型 ${r.llm.provider}/${r.llm.model}`; llm.classList.remove('off'); }
+    else { llm.textContent = '大模型：未接入（规则模板）'; llm.classList.add('off'); }
+    renderSamples(r.samples || []);
+  } else {
+    $('statusCard').innerHTML = '';
+    $('error').innerHTML = `<div class="err"><b>模型加载失败</b>：${r.error || '未知错误'}<br>
+      请先运行 <code>python scripts/train.py</code></div>`;
+  }
+}
+
+function fileUrl(p){ return '/files/' + p.replace(/\\/g,'/').split('/').map(encodeURIComponent).join('/'); }
+
+function renderSamples(samples){
+  const box = $('samples');
+  box.innerHTML = '';
+  $('sampleCount').textContent = `${samples.length} 张`;
+  samples.forEach(s => {
+    const img = document.createElement('img');
+    img.src = fileUrl(s.path);
+    img.title = `${s.label} / ${s.name}`;
+    img.dataset.path = s.path;
+    img.onclick = () => detectPath(s.path);
+    box.appendChild(img);
+  });
+}
+
+/* ---------------- 选择与拖放 ---------------- */
+const drop = $('drop'), input = $('fileInput');
+drop.onclick = () => input.click();
+input.onchange = () => { if (input.files[0]) useFile(input.files[0]); };
+['dragover','dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f){ useFile(f); detectFile(); } });
+window.addEventListener('paste', e => {
+  const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
+  if (item){ useFile(item.getAsFile()); detectFile(); }
+});
+
+function useFile(file){
+  if (!file || !file.type.startsWith('image/')) return;
+  selectedFile = file; selectedPath = null;
+  document.querySelectorAll('.samples img').forEach(i => i.classList.remove('sel'));
+  $('btnDetect').disabled = false;
+  $('fileName').textContent = file.name;
+  $('error').innerHTML = '';
+}
+
+function clearAll(){
+  selectedFile = null; selectedPath = null; lastResult = null;
+  input.value = '';
+  document.querySelectorAll('.samples img').forEach(i => i.classList.remove('sel'));
+  $('btnDetect').disabled = true; $('btnExport').disabled = true;
+  ['verdict','score','thr','nreg','ms','fileName'].forEach(k => $(k).textContent = '—');
+  $('severity').className = 'chip None'; $('severity').textContent = 'None';
+  $('grid4').innerHTML = `
+    <div class="empty" id="emptyView">还没有检测结果<br><span class="hint">从左侧拖入图片或点击示例，然后点「检测」</span></div>
+    <div class="spinner" id="spinner"><div class="dot"></div><span>正在推理…</span></div>`;
+  $('regionBox').innerHTML = '<div class="hint">检测后在这里显示缺陷区域表。</div>';
+  $('analysisBox').innerHTML = '<div class="hint">检测后在这里显示智能体解读。</div>';
+  $('reason').textContent = ''; $('agentNote').textContent = ''; $('error').innerHTML = '';
+}
+
+/* ---------------- 检测 ---------------- */
+function setBusy(b){
+  $('spinner').classList.toggle('on', b);
+  $('btnDetect').disabled = b || (!selectedFile && !selectedPath);
+  $('btnRandom').disabled = b; $('btnExport').disabled = b || !lastResult;
+}
+
+async function detectFile(){
+  if (!selectedFile) return;
+  setBusy(true); $('error').innerHTML = '';
+  const fd = new FormData();
+  fd.append('image', selectedFile);
+  fd.append('with_llm', $('chkLLM').checked ? '1' : '0');
+  try {
+    const r = await fetch('/api/detect', { method:'POST', body: fd }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error);
+    showResult(r);
+  } catch(e) { $('error').innerHTML = `<div class="err">检测失败：${e.message}</div>`; }
+  finally { setBusy(false); }
+}
+
+async function detectPath(path){
+  setBusy(true); $('error').innerHTML = '';
+  document.querySelectorAll('.samples img').forEach(i => i.classList.toggle('sel', i.dataset.path === path));
+  try {
+    const r = await fetch('/api/detect_path', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ path, with_llm: $('chkLLM').checked }) }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error);
+    selectedFile = null; selectedPath = path;
+    showResult(r);
+  } catch(e) { $('error').innerHTML = `<div class="err">检测失败：${e.message}</div>`; }
+  finally { setBusy(false); }
+}
+
+async function randomSample(){
+  try {
+    const r = await fetch('/api/random').then(r => r.json());
+    if (r.ok) await detectPath(r.sample.path);
+  } catch(e) { $('error').innerHTML = `<div class="err">${e.message}</div>`; }
+}
+
+/* ---------------- 渲染结果（一屏全展示） ---------------- */
+function showResult(r){
+  lastResult = r;
+  const m = r.meta, f = r.fragments;
+  $('verdict').textContent = m.verdict;
+  $('verdict').className = 'verdict ' + (m.verdict === 'NG' ? 'v-ng' : 'v-ok');
+  $('severity').textContent = m.severity || 'None';
+  $('severity').className = 'chip ' + (m.severity || 'None');
+  $('score').textContent = m.anomaly_score.toFixed(4);
+  $('thr').textContent = m.threshold.toFixed(4);
+  $('nreg').textContent = m.num_regions + ' 处';
+  $('ms').textContent = m.inference_ms + ' ms';
+  $('fileName').textContent = m.image_name;
+
+  // 四种视图同时渲染到 2x2 网格
+  const cell = (title, body, cap) =>
+    `<div class="cell"><div class="cellTitle">${title}</div><div class="cellBody">${body}</div>` +
+    (cap ? `<div class="cap">${cap}</div>` : '') + `</div>`;
+  const overlayHtml = f.overlay || '<span class="hint">无叠加图</span>';
+  const grid = document.getElementById('grid4');
+  grid.innerHTML = `
+    ${cell('异常叠加', overlayHtml, '白边为缺陷轮廓，彩色框为检出区域')}
+    ${cell('原图', `<img src="${r.prepared_image}" alt="原图">`, '输入图像（对齐后）')}
+    ${cell('热力图', svgOf(f, 0), capOf(f, 0))}
+    ${cell('分数分布', svgOf(f, 1), capOf(f, 1))}
+    <div class="spinner" id="spinner"><div class="dot"></div><span>正在推理…</span></div>`;
+  grid.querySelectorAll('img').forEach(img => {
+    if (img.complete) fitViews(); else img.onload = fitViews;
+  });
+
+  // 底部双栏：缺陷区域表 + 智能体解读
+  const table = f.regions ? f.regions : '<div class="hint">未检出缺陷区域（判定 OK）</div>';
+  const note = r.agent_note ? `（${r.agent_note}）` : '';
+  $('regionBox').innerHTML = table;
+  $('analysisBox').innerHTML = `<pre>${esc(r.analysis || '（未生成解读）')}</pre>`;
+  $('reason').textContent = [m.verdict_reason, m.recommendation].filter(Boolean).join(' · ');
+  $('agentNote').textContent = note;
+  $('btnExport').disabled = false;
+  fitViews();
+}
+
+// f.svgs 里依次是热力图、直方图两个 <figure>：取出其中的 svg
+function svgOf(f, idx){
+  const div = document.createElement('div');
+  div.innerHTML = f.svgs || '';
+  const figs = div.querySelectorAll('figure');
+  if (!figs.length) return '<span class="hint">（无）</span>';
+  const i = Math.min(idx, figs.length - 1);
+  const svg = figs[i].querySelector('svg');
+  return svg ? svg.outerHTML : '<span class="hint">（无）</span>';
+}
+
+function capOf(f, idx){
+  const div = document.createElement('div');
+  div.innerHTML = f.svgs || '';
+  const figs = div.querySelectorAll('figure');
+  if (!figs.length) return '';
+  const i = Math.min(idx, figs.length - 1);
+  const cap = figs[i].querySelector('figcaption');
+  return cap ? cap.textContent : '';
+}
+
+function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+/* 每个视图单元按自身容器实际大小计算图片/SVG 尺寸（contain，不溢出） */
+function fitViews(){
+  document.querySelectorAll('#grid4 .cell').forEach(cell => {
+    const body = cell.querySelector('.cellBody');
+    const el = cell.querySelector('img, svg');
+    if (!body || !el) return;
+    const W = body.clientWidth - 4, H = body.clientHeight - 4;
+    if (W <= 0 || H <= 0) return;
+    const isSvg = el.tagName.toLowerCase() === 'svg';
+    let w, h;
+    if (isSvg){
+      const vb = (el.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+      const ratio = (vb.length === 4 && vb[2] > 0) ? vb[3] / vb[2] : 0.5;
+      w = W; h = w * ratio;
+      if (h > H){ h = H; w = h / ratio; }
+      el.setAttribute('width', Math.round(w));
+      el.setAttribute('height', Math.round(h));
+      el.style.width = Math.round(w) + 'px';
+      el.style.height = Math.round(h) + 'px';
+    } else {
+      const nw = el.naturalWidth || 1, nh = el.naturalHeight || 1;
+      const ratio = nh / nw;
+      w = W; h = w * ratio;
+      if (h > H){ h = H; w = h / ratio; }
+      el.style.width = Math.round(w) + 'px';
+      el.style.height = Math.round(h) + 'px';
+    }
+  });
+}
+window.addEventListener('resize', fitViews);
+
+/* ---------------- 导出 ---------------- */
+async function exportReport(){
+  if (!lastResult) return;
+  try {
+    const r = await fetch('/api/export', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ analysis: lastResult.analysis }) }).then(r => r.json());
+    if (!r.ok) throw new Error(r.error);
+    window.open(r.url, '_blank');
+  } catch(e) { $('error').innerHTML = `<div class="err">导出失败：${e.message}</div>`; }
+}
+
+/* ---------------- 事件 ---------------- */
+$('btnDetect').onclick = () => selectedFile ? detectFile() : (selectedPath && detectPath(selectedPath));
+$('btnRandom').onclick = randomSample;
+$('btnClear').onclick = clearAll;
+$('btnExport').onclick = exportReport;
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter'){
+    e.preventDefault();
+    selectedFile ? detectFile() : selectedPath && detectPath(selectedPath);
+  }
+});
+init();
+</script>
+</body>
+</html>
