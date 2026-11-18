@@ -1,8 +1,9 @@
-# PatchCore 无监督缺陷检测 + LangGraph 智能体质检
+# PatchCore 无监督缺陷检测 + LangGraph 智能体质检 + 机械臂自动分拣
 
 > 数据集：`E:\Projects\shixun\jslm\metal_nut`（MVTec-AD 金属螺母子集）
 > 算法：PatchCore（Roth et al., *Towards Total Recall in Industrial Anomaly Detection*, CVPR 2022）——**只用正常样本训练**
-> 智能体：LangGraph 状态图 + 大模型（OpenAI 兼容接口，默认 DeepSeek）+ 9 个工具，输出 Markdown / HTML 质检报告
+> 智能体：LangGraph 状态图 + 大模型（OpenAI 兼容接口，默认 DeepSeek）+ 9 个工具，输出 Markdown / HTML / Word 质检报告
+> 执行：检测出 NG 后自动进入剔除队列，机械臂抓取放入废料箱；仿真对象 + 可替换 Modbus 驱动
 
 ---
 
@@ -119,7 +120,9 @@ D:\anconda\envs\yolov8-gpu\python.exe -m agent.web
 2. 也可以点下方**「测试集示例」缩略图**直接检测，或点「🎲 随机示例」随机抽一张；
 3. 右侧立刻显示：判定 OK/NG、严重度、异常分数/阈值、推理耗时、原图、异常叠加图、
    热力图、分数直方图、缺陷区域表；下方给出智能体解读；
-4. 点「导出 HTML 报告」可生成与命令行版一致的离线报告，存到 `outputs/reports/`。
+4. 检测为 NG 时自动进入剔除队列，左侧“机械臂分拣”卡片显示机械臂状态、队列、已剔除数和放行数；
+   可切换自动/监控、急停、复位；
+5. 点「导出」并选择格式：HTML 可直接在浏览器查看；Word（.docx）带原图、叠加图、指标表和缺陷区域表；Markdown 便于继续编辑。文件都存到 `outputs/reports/`。
 
 可选参数：`--port 8000` 换端口、`--no-browser` 不自动开浏览器、`--no-llm` 禁用大模型解读。
 这是只监听本机 `127.0.0.1` 的轻量服务（Python 标准库实现，无额外依赖），按 Ctrl+C 停止。
@@ -166,7 +169,7 @@ START ─► planner ─► agent ─┬─(tool_calls)─► tools ─┐
 | **planner** | 解析请求里的图片/目录绝对路径，判定 single / multi / folder / general | ✅ |
 | **agent** | 有 function calling → 原生 ReAct 循环（`ToolNode`）；否则 LLM 出 JSON 计划、本地执行；无 LLM → 规则执行 | ✅ |
 | **reporter** | 只使用状态里的真实工具输出（evidence）写解读，绝不自己编数字 | ✅ 确定性模板 |
-| **render** | 渲染 Markdown / HTML 报告（原图、叠加图、热力图 SVG、分数直方图） | ✅ |
+| **render** | 渲染 Markdown / HTML / Word 报告（原图、叠加图、热力图 SVG、分数直方图） | ✅ |
 
 工具清单：
 
@@ -182,6 +185,25 @@ START ─► planner ─► agent ─┬─(tool_calls)─► tools ─┐
 
 **代码对应**：`agent/graph.py` 里的 `QCState` 定义状态，`make_planner / make_agent / make_reporter / make_render`
 是四个节点，`build_graph()` 连边，`QCAgent.run(request)` 跑完整条流水线并落盘报告。
+
+### 2.3 机械臂自动分拣
+
+```
+检测结果 NG ─► 剔除队列 ─► 传送带送料 ─► 取料位下降 ─► 真空吸取
+           ─► 提升 ─► 横移到废料箱 ─► 放下 ─► 回原点
+```
+
+- 状态机：`IDLE / CONVEY / APPROACH / DESCEND / GRIP / LIFT / TRANSFER / PLACE / RELEASE / RETURN`，
+  另有 `ABORT / FAULT / ESTOP`。
+- 安全：工作空间钳位、急停、防护门、真空确认、队列上限、单件超时、故障锁存。
+- 仿真对象：`robot_sorting/cell.py`（三轴坐标 + 真空 + 料箱计数）。
+- 可替换驱动：`robot_sorting/driver.py` 里的 `ModbusArmDriver` 骨架，真实机械臂按点表改 `REGISTER_MAP`。
+- 网页接口：`/api/robot/status`、`/api/robot/mode`、`/api/robot/estop`、`/api/robot/reset`、`/api/robot/fault`。
+- 验收：`robot_sorting/tests/test_sorting_loop.py`，7 项全过（NG 剔除、OK 放行、急停复位、监控模式、
+  真空丢失中止、多件排队及队列满、无效结果转人工）。
+
+> 注意：当前没有真实机械臂，Modbus 驱动未做现场连通测试；网页里是仿真动作，不能当作产线实测。
+> 现场接入步骤见 `docs/11_机械臂自动分拣说明.md`。
 
 ---
 
@@ -290,12 +312,18 @@ E:\Projects\shixun\jslm\
 │   ├── detector.py               # 阈值解析 + 单图/批量检测 → 结构化 JSON
 │   ├── metrics.py                # AUROC / 像素AUROC / PRO@0.3 / 混淆矩阵 / 阈值灵敏度
 │   └── viz.py                    # 叠加图 PNG、热力图 SVG、分数直方图 SVG
+├── robot_sorting/                # 机械臂自动分拣
+│   ├── cell.py                   # 三轴机械臂/传送带/料箱仿真
+│   ├── safety.py                 # 工作空间/急停/防护门约束
+│   ├── driver.py                 # 仿真驱动 + Modbus TCP 骨架
+│   ├── controller.py             # 剔除队列 + 分拣状态机
+│   └── tests/test_sorting_loop.py
 ├── agent/
 │   ├── graph.py                  # LangGraph 状态图 planner→agent→reporter→render
 │   ├── llm.py                    # provider 选择、ChatOpenAI 兼容封装、降级策略
 │   ├── tools_detect.py           # 检测类工具
 │   ├── tools_data.py             # 数据/模型/评估查询工具
-│   ├── report.py                 # Markdown / HTML 报告渲染
+│   ├── report.py                 # Markdown / HTML / Word 报告渲染
 │   ├── cli.py                    # 命令行入口
 │   └── web.py                    # 本地网页版服务（127.0.0.1:7860，自动开浏览器）
 ├── scripts/

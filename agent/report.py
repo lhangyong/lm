@@ -264,6 +264,181 @@ def render_batch_markdown(rows: List[Dict], meta: Optional[Dict] = None, analysi
     return "\n".join(lines)
 
 
+def render_docx(item: Dict, meta: Optional[Dict] = None, analysis: Optional[str] = None,
+                base: Optional[Path] = None, out_path: Optional[Path] = None) -> Path:
+    """把单图结果导出成 Word（.docx），图片用报告 assets 目录里的文件。"""
+    from docx import Document
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.shared import Cm, Pt, RGBColor
+
+    if out_path is None:
+        raise ValueError("out_path 必填")
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    meta = meta or {}
+
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_width, sec.page_height = Cm(21.0), Cm(29.7)
+    sec.top_margin = sec.bottom_margin = Cm(2.2)
+    sec.left_margin = sec.right_margin = Cm(2.2)
+
+    normal = doc.styles["Normal"]
+    normal.font.name = "Times New Roman"
+    normal.font.size = Pt(10.5)
+    normal.element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
+
+    def _run(run, size=10.5, bold=False, color=None, font="宋体"):
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(size)
+        run.bold = bold
+        if color:
+            run.font.color.rgb = RGBColor(*color)
+        run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), font)
+
+    def heading(text, level=1):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(12 if level == 1 else 8)
+        p.paragraph_format.space_after = Pt(6 if level == 1 else 4)
+        _run(p.add_run(text), 15 if level == 1 else 12, True, font="黑体")
+        return p
+
+    def body(text, size=10.5, bold=False, color=None, align=None):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(3)
+        if align is not None:
+            p.alignment = align
+        _run(p.add_run(str(text)), size, bold, color)
+        return p
+
+    def cell(c, text, bold=False, size=9.5, align=None):
+        c.text = ""
+        p = c.paragraphs[0]
+        p.paragraph_format.space_after = Pt(0)
+        if align is not None:
+            p.alignment = align
+        _run(p.add_run(str(text)), size, bold)
+
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_after = Pt(4)
+    _run(title.add_run("工业视觉质检报告"), 18, True, font="黑体")
+
+    sub = doc.add_paragraph()
+    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    sub.paragraph_format.space_after = Pt(14)
+    _run(sub.add_run(f"{item['image_name']} · PatchCore 无监督缺陷检测 · LangGraph 智能体生成"),
+         9.5, False, (0x66, 0x66, 0x66))
+
+    ok = item.get("verdict") == "OK"
+    verdict = doc.add_paragraph()
+    verdict.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    verdict.paragraph_format.space_after = Pt(8)
+    _run(verdict.add_run("判定为 OK（合格），可放行" if ok else "判定为 NG（不合格），需拦截处理"),
+         13, True, (0x18, 0x7A, 0x3F) if ok else (0xC0, 0x28, 0x2D))
+
+    info = [
+        ("产线 / 工位", meta.get("line_name", "-")),
+        ("报告生成时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        ("检测模型", f"PatchCore · {item['model'].get('backbone', '-')} · "
+                     f"memory bank {item['model'].get('coreset', 0)} patches"),
+        ("阈值来源", item.get("threshold_source", "-")),
+        ("判定逻辑", "异常分数 ≥ 图像阈值，且存在局部显著缺陷区域 → NG；"
+                     "区域面积 ≥ 10% 为 Major、≥ 2% 为 Minor，其余为 Trace"),
+    ]
+    table = doc.add_table(rows=len(info), cols=2)
+    table.style = "Table Grid"
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for i, (k, v) in enumerate(info):
+        cell(table.rows[i].cells[0], k, True, 9.5)
+        cell(table.rows[i].cells[1], v, False, 9.5)
+
+    heading("检测指标", 2)
+    metrics = [
+        ("异常分数", f"{item['anomaly_score']:.4f}"),
+        ("判定阈值", f"{item['threshold']:.4f}"),
+        ("缺陷区域", f"{item.get('num_regions', 0)} 处"),
+        ("异常面积", f"{item.get('defect_ratio', 0):.4%}"),
+        ("严重度", item.get("severity", "None")),
+        ("处理建议", item.get("recommendation", "")),
+    ]
+    mt = doc.add_table(rows=3, cols=4)
+    mt.style = "Table Grid"
+    mt.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for idx, (k, v) in enumerate(metrics):
+        r, c = divmod(idx, 2)
+        cell(mt.rows[r].cells[c * 2], k, True, 9.5)
+        cell(mt.rows[r].cells[c * 2 + 1], v, False, 9.5)
+
+    if item.get("verdict_reason"):
+        body("判定依据：" + str(item["verdict_reason"]), 9.5)
+
+    rows = item.get("regions") or []
+    if rows:
+        heading("缺陷区域", 2)
+        rt = doc.add_table(rows=1, cols=5)
+        rt.style = "Table Grid"
+        rt.alignment = WD_TABLE_ALIGNMENT.CENTER
+        for c, h in enumerate(("#", "位置", "面积占比", "显著度", "级别")):
+            cell(rt.rows[0].cells[c], h, True, 9.0, WD_ALIGN_PARAGRAPH.CENTER)
+        for i, r in enumerate(rows):
+            tr = rt.add_row()
+            vals = (str(i + 1), r.get("location_detail", r.get("location", "")),
+                    f"{r.get('area_ratio', 0):.4%}", f"{r.get('significance', 0):.2f}",
+                    str(r.get("severity", "Trace")))
+            for c, v in enumerate(vals):
+                cell(tr.cells[c], v, False, 9.0,
+                     WD_ALIGN_PARAGRAPH.CENTER if c in (0, 2, 3, 4) else None)
+
+    heading("可视化", 2)
+    figs = []
+    src = item.get("image_path")
+    if src and Path(src).exists():
+        figs.append(("原始图像", Path(src)))
+    overlay = (item.get("visuals") or {}).get("overlay_png")
+    if overlay and Path(overlay).exists():
+        figs.append(("异常叠加图", Path(overlay)))
+    for cap, path in figs:
+        try:
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.add_run().add_picture(str(path), width=Cm(13.5))
+            c = doc.add_paragraph()
+            c.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _run(c.add_run(cap), 9, False, (0x66, 0x66, 0x66))
+        except Exception as exc:
+            body(f"{cap}插入失败：{exc}", 9)
+
+    if analysis:
+        heading("智能体分析", 2)
+        lines = [ln.rstrip() for ln in str(analysis).splitlines()]
+        for ln in lines:
+            s = ln.strip()
+            if not s:
+                doc.add_paragraph()
+                continue
+            if s.startswith("#"):
+                heading(s.lstrip("#").strip(), 2)
+                continue
+            if s.startswith(("- ", "* ")):
+                p = doc.add_paragraph(style="List Bullet")
+                p.paragraph_format.space_after = Pt(2)
+                _run(p.add_run(s[2:].replace("**", "").replace("`", "")), 10)
+                continue
+            body(s.replace("**", "").replace("`", ""), 10)
+
+    heading("说明", 2)
+    note = ("本报告由「PatchCore 无监督缺陷检测 + LangGraph 质检智能体」自动生成。"
+            "检测模型仅使用正常样本训练，不使用任何缺陷标注；阈值由训练集正常样本分数自动标定，"
+            "判定结果需结合产线工艺规范复核。")
+    body(note, 9, False, (0x66, 0x66, 0x66))
+
+    doc.save(str(out_path))
+    return out_path
+
+
 def render_batch_html(rows: List[Dict], meta: Optional[Dict] = None, analysis: Optional[str] = None,
                       base: Optional[Path] = None) -> str:
     base = base or Path(".")

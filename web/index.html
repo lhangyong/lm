@@ -107,6 +107,27 @@
   pre{ white-space:pre-wrap; font-size:12.5px; font-family:'Cascadia Mono',Consolas,monospace;
        line-height:1.6; margin:0; background:var(--panel2); padding:10px 12px; border-radius:8px; }
 
+  /* ---------- 机械臂分拣卡 ---------- */
+  .robotCard{ margin-top:8px; border:1px solid var(--line); border-radius:10px; background:var(--panel2);
+              padding:8px 10px; flex:0 0 auto; }
+  .robotHead{ display:flex; align-items:center; justify-content:space-between; font-size:12.5px; }
+  .robotHead b{ color:#dbe3ee; }
+  .robotState{ font-size:11.5px; color:var(--ok); }
+  .robotState.bad{ color:var(--ng); }
+  #robotCanvas{ width:100%; height:92px; display:block; margin:3px 0 2px; }
+  .robotMeta{ display:flex; justify-content:space-between; font-size:11.5px; color:var(--muted); }
+  .robotMeta b{ color:#dbe3ee; }
+  .robotBtns{ display:flex; align-items:center; gap:6px; margin-top:7px; }
+  .robotBtns button{ padding:5px 9px; font-size:12px; }
+  .robotBtns input{ accent-color:var(--accent); }
+  .robotAction{ margin-top:5px; font-size:11px; color:#8b949e; white-space:nowrap; overflow:hidden;
+                text-overflow:ellipsis; }
+  button.danger{ border-color:#7f1d1d; color:#fca5a5; }
+  .badge.warn{ background:#b45309; }
+  select{ font:inherit; font-size:12.5px; padding:6px 8px; border-radius:8px;
+          border:1px solid #2f3644; background:var(--panel2); color:var(--text); }
+  .exportBox{ display:inline-flex; align-items:center; gap:4px; }
+
   ::-webkit-scrollbar{ width:8px; height:8px; }
   ::-webkit-scrollbar-thumb{ background:#2f3644; border-radius:4px; }
 </style>
@@ -122,7 +143,14 @@
     <label class="switch"><input type="checkbox" id="chkLLM"> 大模型解读</label>
     <button class="primary" id="btnDetect" disabled>检测 (Ctrl+Enter)</button>
     <button id="btnRandom">🎲 随机</button>
-    <button id="btnExport" disabled>导出报告</button>
+    <span class="exportBox">
+      <select id="exportFormat" title="选择导出格式">
+        <option value="html">HTML</option>
+        <option value="docx">Word</option>
+        <option value="markdown">Markdown</option>
+      </select>
+      <button id="btnExport" disabled>导出</button>
+    </span>
     <button id="btnClear" class="icon" title="清除">⟲</button>
   </div>
 
@@ -138,6 +166,21 @@
       <div class="thumbs-title"><span>测试集示例 · 点击即检测</span><span id="sampleCount"></span></div>
       <div class="samples" id="samples"></div>
       <div id="error"></div>
+      <div class="robotCard">
+        <div class="robotHead"><b>机械臂分拣</b><span id="robotState" class="robotState">待机</span></div>
+        <canvas id="robotCanvas"></canvas>
+        <div class="robotMeta">
+          <span>队列 <b id="robotQueue">0</b></span>
+          <span>已剔除 <b id="robotRejected">0</b></span>
+          <span>放行 <b id="robotPassed">0</b></span>
+        </div>
+        <div class="robotBtns">
+          <label class="switch"><input type="checkbox" id="chkSort" checked> 自动分拣</label>
+          <button id="btnEstop" class="danger">急停</button>
+          <button id="btnRobotReset">复位</button>
+        </div>
+        <div class="robotAction" id="robotAction">等待检测结果</div>
+      </div>
     </aside>
 
     <!-- 右：结果（一屏全展示） -->
@@ -145,6 +188,7 @@
       <div class="resultHead">
         <span class="verdict" id="verdict">—</span>
         <span class="chip None" id="severity">None</span>
+        <span id="sortBadge" class="badge off">分拣：待机</span>
         <div class="kv">
           <span>分数 <b id="score">—</b> / 阈值 <b id="thr">—</b></span>
           <span>区域 <b id="nreg">—</b></span>
@@ -247,6 +291,7 @@ function clearAll(){
   $('regionBox').innerHTML = '<div class="hint">检测后在这里显示缺陷区域表。</div>';
   $('analysisBox').innerHTML = '<div class="hint">检测后在这里显示智能体解读。</div>';
   $('reason').textContent = ''; $('agentNote').textContent = ''; $('error').innerHTML = '';
+  $('sortBadge').textContent = '分拣：待机'; $('sortBadge').className = 'badge off';
 }
 
 /* ---------------- 检测 ---------------- */
@@ -328,6 +373,19 @@ function showResult(r){
   $('reason').textContent = [m.verdict_reason, m.recommendation].filter(Boolean).join(' · ');
   $('agentNote').textContent = note;
   $('btnExport').disabled = false;
+
+  // 本次检测的分拣动作：NG 入队 / OK 放行 / 监控模式
+  if (r.sorting){
+    const s = r.sorting;
+    const label = {queued:'已入剔除队列', pass:'OK 放行', monitor:'仅监控',
+                   blocked:'急停/故障，转人工', buffer_full:'队列满，转人工',
+                   invalid:'结果无效，转人工'}[s.action] || s.action;
+    $('sortBadge').textContent = '分拣：' + label;
+    $('sortBadge').className = 'badge ' + (s.action === 'queued' ? '' :
+      (s.action === 'pass' ? 'off' : 'warn'));
+    $('robotAction').textContent = s.message || label;
+    refreshRobot();
+  }
   fitViews();
 }
 
@@ -389,11 +447,86 @@ window.addEventListener('resize', fitViews);
 async function exportReport(){
   if (!lastResult) return;
   try {
+    const fmt = $('exportFormat').value;
     const r = await fetch('/api/export', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ analysis: lastResult.analysis }) }).then(r => r.json());
+      body: JSON.stringify({ analysis: lastResult.analysis, format: fmt }) }).then(r => r.json());
     if (!r.ok) throw new Error(r.error);
     window.open(r.url, '_blank');
   } catch(e) { $('error').innerHTML = `<div class="err">导出失败：${e.message}</div>`; }
+}
+
+/* ---------------- 机械臂分拣 ---------------- */
+async function refreshRobot(){
+  try {
+    const s = await fetch('/api/robot/status').then(r => r.json());
+    if (!s || !s.ok) return;
+    const st = $('robotState');
+    st.textContent = s.state_cn || s.state;
+    st.className = 'robotState ' + (['FAULT','ESTOP','ABORT'].includes(s.state) ? 'bad' : '');
+    $('robotQueue').textContent = s.queue_len;
+    $('robotRejected').textContent = s.reject_bin;
+    $('robotPassed').textContent = s.stats ? s.stats.passed : 0;
+    $('robotAction').textContent = s.last_action || '等待检测结果';
+    $('chkSort').checked = s.mode === 'auto';
+    const badge = $('sortBadge');
+    if (badge.textContent.startsWith('分拣：待机') || badge.textContent === '') {
+      badge.textContent = '分拣：' + (s.state_cn || '待机');
+      badge.className = 'badge ' + (['FAULT','ESTOP','ABORT'].includes(s.state) ? 'warn' : 'off');
+    }
+    drawRobot(s);
+  } catch(e) { /* 服务重启时忽略 */ }
+}
+
+function drawRobot(s){
+  const c = $('robotCanvas'); if (!c) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = c.clientWidth || 260, H = c.clientHeight || 92;
+  c.width = W * dpr; c.height = H * dpr;
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const cy = H - 22;
+  // 传送带
+  ctx.strokeStyle = '#2f3644'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(8, cy); ctx.lineTo(W - 8, cy); ctx.stroke();
+  ctx.fillStyle = '#374151'; ctx.font = '9px Segoe UI';
+  ctx.fillText('传送带', 8, cy + 15);
+  // 取料位
+  ctx.fillStyle = '#2563eb'; ctx.fillRect(W * 0.32 - 15, cy - 4, 30, 8);
+  ctx.fillStyle = '#60a5fa'; ctx.fillText('取料', W * 0.32 - 10, cy - 10);
+  // 废料箱
+  const bx = W * 0.78;
+  ctx.strokeStyle = '#7f1d1d'; ctx.lineWidth = 1.5;
+  ctx.strokeRect(bx - 18, cy - 22, 36, 22);
+  ctx.fillStyle = '#3a1518'; ctx.fillRect(bx - 17, cy - 21, 34, 20);
+  ctx.fillStyle = '#fca5a5'; ctx.font = '9px Segoe UI';
+  ctx.fillText('剔除 ' + (s.reject_bin || 0), bx - 16, cy + 15);
+
+  // 龙门架 + 伸缩臂
+  ctx.strokeStyle = '#374151'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(14, 16); ctx.lineTo(W - 14, 16); ctx.stroke();
+  const arm = s.arm || {x:20, y:0, z:60};
+  const ax = 18 + (Math.max(0, Math.min(400, arm.x)) / 400) * (W - 36);
+  const hookY = 22 + (1 - Math.max(0, Math.min(100, arm.z)) / 100) * 34;
+  ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(ax, 16); ctx.lineTo(ax, hookY); ctx.stroke();
+  ctx.fillStyle = '#60a5fa'; ctx.beginPath(); ctx.arc(ax, hookY, 3.5, 0, Math.PI * 2); ctx.fill();
+
+  // 工件：在取料位，或已被吸盘带走
+  const atPick = s.current && ['CONVEY','APPROACH','DESCEND','GRIP'].includes(s.state);
+  const onHook = s.current && s.vacuum && !['RELEASE','RETURN'].includes(s.state);
+  if (s.current && (atPick || onHook)) {
+    const px = onHook ? ax : W * 0.32;
+    const py = onHook ? hookY + 5 : cy - 5;
+    ctx.fillStyle = '#f5a524';
+    ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // 状态角标
+  ctx.fillStyle = ['FAULT','ESTOP','ABORT'].includes(s.state) ? '#ff6b6b' : '#3ddc84';
+  ctx.font = '10px Segoe UI';
+  ctx.fillText(s.state_cn || s.state, W - 58, 12);
 }
 
 /* ---------------- 事件 ---------------- */
@@ -401,6 +534,19 @@ $('btnDetect').onclick = () => selectedFile ? detectFile() : (selectedPath && de
 $('btnRandom').onclick = randomSample;
 $('btnClear').onclick = clearAll;
 $('btnExport').onclick = exportReport;
+$('chkSort').onchange = async e => {
+  await fetch('/api/robot/mode', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({mode: e.target.checked ? 'auto' : 'monitor'})});
+  refreshRobot();
+};
+$('btnEstop').onclick = async () => {
+  await fetch('/api/robot/estop', {method:'POST'});
+  refreshRobot();
+};
+$('btnRobotReset').onclick = async () => {
+  await fetch('/api/robot/reset', {method:'POST'});
+  refreshRobot();
+};
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter'){
     e.preventDefault();
@@ -408,6 +554,8 @@ document.addEventListener('keydown', e => {
   }
 });
 init();
+refreshRobot();
+setInterval(refreshRobot, 900);
 </script>
 </body>
 </html>

@@ -10,7 +10,7 @@
 - 拖放 / 点击选择 / 直接粘贴图片，或从下方测试集示例中点选（方便随机抽样演示）
 - 点击「开始检测」：PatchCore 推理 → 判定 OK/NG → 显示叠加图、热力图、缺陷区域表
 - 可切换「大模型解读」：接入时由 LangGraph 智能体生成解读，未接入时用规则模板
-- 一键把本次结果导出成离线 HTML 报告（与命令行版格式一致）
+- 一键把本次结果导出成离线报告（HTML / Word / Markdown）
 
 说明：这是本机 127.0.0.1 上的轻量服务，不对外网开放，也不需要额外安装包
 （只用 Python 标准库 http.server 与现有依赖）。
@@ -46,6 +46,7 @@ from agent.graph import _bundle_visuals
 from patchcore_qc.config import REPORT_DIR, VIS_DIR, AppConfig, load_config
 from patchcore_qc.dataset import IMG_EXTS, list_images, load_image
 from patchcore_qc.detector import DefectInspector, strip_internal
+from robot_sorting.controller import RobotController
 
 WEB_DIR = PROJECT_ROOT / "web"
 WEB_UPLOADS = VIS_DIR / "web_uploads"
@@ -64,6 +65,8 @@ class WebState:
         self.lock = threading.Lock()
         self.samples: List[Dict[str, str]] = []
         self.last_result: Optional[Dict] = None
+        # 机械臂分拣单元：默认 auto，检测出 NG 自动入队剔除
+        self.robot = RobotController(max_queue=8)
 
     def ensure_loaded(self) -> None:
         with self.lock:
@@ -137,6 +140,8 @@ def run_detection(state: WebState, image_path: Path, with_llm: bool) -> Dict:
         raise RuntimeError(state.load_error or "检测器未能初始化")
     out_dir = VIS_DIR / "web"
     result = state.inspector.inspect_image(image_path, out_dir=out_dir, save_visual=True)
+    # 检测结果直接进分拣单元：NG 入剔除队列，OK 放行
+    sorting = state.robot.ingest(result)
     analysis = ""
     agent_note = ""
     if with_llm:
@@ -161,6 +166,7 @@ def run_detection(state: WebState, image_path: Path, with_llm: bool) -> Dict:
         "analysis": analysis,
         "agent_note": agent_note,
         "prepared_image": to_data_url(result["_prepared"]),
+        "sorting": sorting,
         "meta": {
             "image_name": result["image_name"],
             "image_path": result["image_path"],
@@ -185,16 +191,16 @@ def _public(result: Dict) -> Dict:
     return {k: v for k, v in strip_internal(result).items()}
 
 
-def export_report(state: WebState, analysis: str = "") -> Dict[str, str]:
-    """把「最近一次检测」导出成离线 HTML 报告。
-
-    直接用最近一次检测的结果（含可视化路径）渲染，不重复推理。
-    """
+def export_report(state: WebState, analysis: str = "", fmt: str = "html") -> Dict[str, str]:
+    """把「最近一次检测」导出成离线报告（html / markdown / docx），不重复推理。"""
     if state.last_result is None:
         raise RuntimeError("还没有检测结果，请先检测一张图片")
     meta = state.last_result["meta"]
     if state.inspector is None:
         raise RuntimeError("检测器不可用")
+    fmt = str(fmt or "html").lower()
+    if fmt not in ("html", "markdown", "docx"):
+        raise ValueError("format 只支持 html / markdown / docx")
     # 结果里已带有 visuals；重新取一次公开字段即可（inspect_image 不重复落盘）
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -213,7 +219,13 @@ def export_report(state: WebState, analysis: str = "") -> Dict[str, str]:
     html_path = REPORT_DIR / f"{file_name}.html"
     md_path.write_text(md, encoding="utf-8")
     html_path.write_text(html_text, encoding="utf-8")
-    return {"html": str(html_path), "markdown": str(md_path)}
+    paths = {"html": str(html_path), "markdown": str(md_path)}
+    if fmt == "docx":
+        docx_path = REPORT_DIR / f"{file_name}.docx"
+        report_render.render_docx(row, meta=meta_info, analysis=text, base=REPORT_DIR,
+                                  out_path=docx_path)
+        paths["docx"] = str(docx_path)
+    return paths
 
 
 # ================================================================ HTTP
@@ -281,6 +293,9 @@ class Handler(BaseHTTPRequestHandler):
             ctype = ("image/png" if suffix == ".png" else
                      "image/jpeg" if suffix in (".jpg", ".jpeg") else
                      "text/html; charset=utf-8" if suffix == ".html" else
+                     "text/markdown; charset=utf-8" if suffix == ".md" else
+                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                     if suffix == ".docx" else
                      "image/svg+xml" if suffix == ".svg" else
                      "application/octet-stream")
             return self._serve_file(target, ctype)
@@ -289,6 +304,8 @@ class Handler(BaseHTTPRequestHandler):
             if not STATE.samples:
                 return self._error("测试集中没有可用的示例图片", 404)
             return self._json({"ok": True, "sample": random.choice(STATE.samples)})
+        if p == "/api/robot/status":
+            return self._json(STATE.robot.status())
         return self._error("未知路径", 404)
 
     def do_POST(self):
@@ -302,6 +319,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_export()
         if p == "/api/fragments":
             return self._handle_fragments()
+        if p == "/api/robot/mode":
+            return self._handle_robot_mode()
+        if p == "/api/robot/estop":
+            STATE.robot.estop()
+            return self._json(STATE.robot.status())
+        if p == "/api/robot/reset":
+            STATE.robot.reset()
+            return self._json(STATE.robot.status())
+        if p == "/api/robot/fault":
+            return self._handle_robot_fault()
         return self._error("未知接口", 404)
 
     # ---------------------------------------------------------- 接口
@@ -359,12 +386,37 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             data = json.loads(self.rfile.read(length) or b"{}")
-            paths = export_report(STATE, str(data.get("analysis", "")))
-            return self._json({"ok": True, "html": paths["html"], "markdown": paths["markdown"],
-                               "url": "/files/" + Path(paths["html"]).as_posix()})
+            fmt = str(data.get("format", "html")).lower()
+            paths = export_report(STATE, str(data.get("analysis", "")), fmt=fmt)
+            target = paths.get(fmt)
+            if not target:
+                return self._error(f"不支持的导出格式：{fmt}", 400)
+            return self._json({"ok": True, "format": fmt, **paths,
+                               "url": "/files/" + Path(target).as_posix()})
         except Exception as e:
             traceback.print_exc()
             return self._error(f"{type(e).__name__}: {e}", 500)
+
+    def _handle_robot_mode(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            data = json.loads(self.rfile.read(length) or b"{}")
+            mode = STATE.robot.set_mode(str(data.get("mode", "auto")))
+            return self._json({"ok": True, "mode": mode, "robot": STATE.robot.status()})
+        except Exception as e:
+            return self._error(f"{type(e).__name__}: {e}", 400)
+
+    def _handle_robot_fault(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            data = json.loads(self.rfile.read(length) or b"{}")
+            name = data.get("type") or None
+            if name not in (None, "", "vacuum_loss", "jam"):
+                return self._error("fault 只支持 vacuum_loss / jam / 空（清除）", 400)
+            fault = STATE.robot.set_fault(name)
+            return self._json({"ok": True, "fault": fault or "", "robot": STATE.robot.status()})
+        except Exception as e:
+            return self._error(f"{type(e).__name__}: {e}", 400)
 
 
 def _llm_hint(cfg: AppConfig) -> Dict:
@@ -398,6 +450,8 @@ def main(argv=None) -> int:
         cfg.agent.enable_llm = False
     global STATE
     STATE = WebState(cfg)
+    STATE.robot.start()
+    print("[web] 机械臂分拣单元已启动（仿真对象，auto 模式）", flush=True)
     print("[web] 正在加载 PatchCore 模型 ...", flush=True)
     STATE.ensure_loaded()
     if STATE.inspector is None:
