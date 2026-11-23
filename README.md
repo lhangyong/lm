@@ -72,8 +72,10 @@ python scripts/evaluate.py
 ### 4. 网页版
 
 ```bash
-python -m web.server        # 打开 http://127.0.0.1:7860
+python agent/web.py        # 本机访问 http://127.0.0.1:7860
 ```
+
+Windows 也可双击根目录的一键脚本：`train.bat`、`eval.bat`、`start_web.bat`、`smoke_test.bat`（脚本里的 Python 解释器路径请按本机修改）。
 
 ### 5. 自检
 
