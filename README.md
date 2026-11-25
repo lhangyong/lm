@@ -33,6 +33,7 @@ scripts/         训练、评估、自检脚本
 examples/        最小调用示例（检测 / 智能体）
 docs/            设计与说明文档（端侧部署与量化、机械臂分拣等）
 tools/           辅助工具脚本
+metal_nut/       数据集（自行下载，不入库）
 ```
 
 ## 快速开始
@@ -48,11 +49,13 @@ pip install -r requirements.txt
 从 MVTec AD 官网下载 `metal_nut` 子集，解压后保持如下结构（数据集不入库）：
 
 ```
-data/metal_nut/
+metal_nut/
 ├── train/good/          # 220 张正常图，仅训练用
 ├── test/                # good / bent / color / flip / scratch
 └── ground_truth/        # 像素级标注，仅评估用
 ```
+
+数据默认放在仓库根目录的 `metal_nut/`；如需放在别处，用 `--data-root` 或环境变量 `PATCHCORE_DATA_ROOT` 指定。
 
 ### 2. 训练
 
@@ -76,7 +79,7 @@ python scripts/evaluate.py
 python agent/web.py        # 本机访问 http://127.0.0.1:7860
 ```
 
-Windows 也可双击根目录的一键脚本：`train.bat`、`eval.bat`、`start_web.bat`、`smoke_test.bat`（脚本里的 Python 解释器路径请按本机修改）。
+Windows 也可双击根目录的一键脚本：`train.bat`、`eval.bat`、`smoke_test.bat`。脚本默认用 PATH 里的 `python`；解释器不在 PATH 时，可在根目录新建 `python_exe.txt` 写入解释器路径（该文件已忽略、不入库），或设置环境变量 `PYTHON_EXE`。
 
 ### 5. 自检
 
@@ -90,10 +93,10 @@ python scripts/smoke_test.py
 
 ```bash
 # 单图质检，出 Markdown + HTML 报告
-python -m agent.cli "检测 data/metal_nut/test/scratch/000.png 并出具质检报告"
+python -m agent.cli "检测 metal_nut/test/scratch/000.png 并出具质检报告"
 
 # 整批复检
-python -m agent.cli "复检 data/metal_nut/test/flip 这个目录，最多 8 张"
+python -m agent.cli "复检 metal_nut/test/flip 这个目录，最多 8 张"
 
 # 查询模型与评估情况
 python -m agent.cli "当前模型的 AUROC、阈值和混淆矩阵是什么？"
@@ -109,7 +112,7 @@ python -m agent.cli --interactive
 
 ## 说明与限制
 
-- 仓库不含数据集与训练产物，`outputs/`、`data/` 需自行生成。
+- 仓库不含数据集与训练产物，`outputs/`、`metal_nut/` 需自行生成或下载。
 - 分拣执行端当前为仿真对象，真机联调尚未启动；Modbus TCP 点表已预留。
 - 阈值随品类单独标定，换型只重建记忆库；跨批次精度会随光照与纹理变化波动，正式产线需按批次复核。
 - 本项目为工业视觉方向的学习与验证工程，检测指标以仓库内评估脚本输出为准。
