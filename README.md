@@ -119,6 +119,8 @@ ONNX 部署包的文件契约、预处理/后处理、RKNN 转换与自检步骤
 
 仓库只收录部署说明与脚本，ONNX、记忆库、校准图等二进制不入库，需用打包脚本在本地重新导出。
 
+板端实测录屏（67 MB，NanoPi M6 / RK3588 实机运行画面）：[下载 / 查看](https://github.com/lhangyong/lm/releases/download/v1.0/rk3588.mp4)，发布页见 [Release v1.0](https://github.com/lhangyong/lm/releases/tag/v1.0)。
+
 ## 说明与限制
 
 - 仓库不含数据集与训练产物，`outputs/`、`metal_nut/` 需自行生成或下载。
