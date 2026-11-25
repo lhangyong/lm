@@ -20,5 +20,12 @@ metal_nut/
 Thumbs.db
 
 # ===== 本地生成 / 不入库 =====
-deploy/
 python_exe.txt
+
+# ===== 端侧部署包：说明与脚本入库，二进制大文件不入库 =====
+deploy/**/*.onnx
+deploy/**/*.bin
+deploy/**/*.npz
+deploy/**/*.zip
+deploy/**/calib_images/
+deploy/**/SHA256SUMS.txt

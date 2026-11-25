@@ -1,0 +1,63 @@
+{
+  "task": "PatchCore 异常检测 - 特征主干（RKNN 部署）",
+  "backbone": "resnet18",
+  "layers": [
+    "layer2",
+    "layer3"
+  ],
+  "image_size": 256,
+  "center_crop": 256,
+  "auto_crop": false,
+  "local_pool": true,
+  "normalize": false,
+  "n_neighbors": 1,
+  "gaussian_sigma": 4.0,
+  "feature_dim": 384,
+  "grid_size": 32,
+  "n_coreset": 2253,
+  "input": {
+    "layout": "NCHW",
+    "dtype": "float32",
+    "batch": 1,
+    "channels": 3,
+    "height": 256,
+    "width": 256,
+    "color": "RGB",
+    "pixel_scale": "pixel / 255.0",
+    "mean": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "std": [
+      255.0,
+      255.0,
+      255.0
+    ]
+  },
+  "output": {
+    "name": "patches",
+    "shape": [
+      1,
+      1024,
+      384
+    ],
+    "desc": "每个 patch 的描述子；板子上与 memory_bank.npz 的 features 做最近邻距离"
+  },
+  "postprocess": [
+    "1) 输出 patches 形状 [1, N, C]，N = grid_size*grid_size",
+    "2) 每个 patch 求到记忆库 features 的最近邻欧氏距离（k=n_neighbors）",
+    "3) 用 patch_scores 做重加权（孤僻正常 patch 权重更高）",
+    "4) 按 grid_size 还原成热力图，做高斯平滑(sigma=gaussian_sigma)",
+    "5) 热力图最大值 = 图像级异常分数；与 calibration.json 的阈值比较判 OK/NG"
+  ],
+  "thresholds": {
+    "image_score": 1.4594295024871826,
+    "pixel_score": 1.413089632987976,
+    "calib_n_images": 220
+  },
+  "package": {
+    "name": "nut_onnx_20261125",
+    "source_model": "metal_nut_resnet18_sz256_3x3.pt"
+  }
+}

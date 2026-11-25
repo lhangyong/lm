@@ -33,6 +33,7 @@ scripts/         训练、评估、自检脚本
 examples/        最小调用示例（检测 / 智能体）
 docs/            设计与说明文档（端侧部署与量化、机械臂分拣等）
 tools/           辅助工具脚本
+deploy/          端侧部署包：说明、自检与 RKNN 转换脚本（模型文件不入库）
 metal_nut/       数据集（自行下载，不入库）
 ```
 
@@ -109,6 +110,14 @@ python -m agent.cli --interactive
 ```
 
 大模型接入走环境变量（OpenAI 兼容接口，默认 DeepSeek），不配置时自动降级为规则引擎。
+
+## 端侧部署
+
+板端（RK3588 / NanoPi M6）的量化方案、精度与实测耗时见 `docs/10_端侧部署与量化说明.md`；
+ONNX 部署包的文件契约、预处理/后处理、RKNN 转换与自检步骤见 `deploy/nut_onnx_20261125/README.md`，
+打包脚本为 `tools/build_onnx_package.py`。
+
+仓库只收录部署说明与脚本，ONNX、记忆库、校准图等二进制不入库，需用打包脚本在本地重新导出。
 
 ## 说明与限制
 
