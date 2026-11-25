@@ -1,9 +1,8 @@
 """本地网页版质检工具：在浏览器里拖放一张图片，点击检测即可看到结果。
 
-启动::
+启动（在仓库根目录执行）::
 
-    cd E:\\Projects\\shixun\\jslm
-    D:\\anconda\\envs\\yolov8-gpu\\python.exe -m agent.web
+    python -m agent.web
     # 然后浏览器打开 http://127.0.0.1:7860
 
 功能：
@@ -153,7 +152,7 @@ def run_detection(state: WebState, image_path: Path, with_llm: bool) -> Dict:
             agent_note = (f"{status.provider}/{status.model}" if status.enabled
                           else status.reason)
         except Exception as e:
-            agent_note = f"大模型解读失败，已改用规则模板：{type(e).__name__}: {e}"
+            agent_note = f"Agent 解读失败，已改用规则模板：{type(e).__name__}: {e}"
     if not analysis:
         from agent.graph import template_analysis
         analysis = template_analysis([{**_public(result), "_tool": "inspect_image"}], [])

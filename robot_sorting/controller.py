@@ -29,6 +29,7 @@ STATE_CN = {
     "PLACE": "下降放料",
     "RELEASE": "松开吸盘",
     "RETURN": "回原点",
+    "RECOVER": "复位前先放件",
     "ABORT": "异常回原点",
     "FAULT": "故障停机",
     "ESTOP": "急停",
@@ -55,6 +56,7 @@ class RobotController:
         self._timer = 0.0
         self._seq = 0
         self._cycle_timeout = 12.0
+        self._recover_stage = "above"
         if auto_start:
             self.start()
 
@@ -89,10 +91,13 @@ class RobotController:
         defect_ratio = float(result.get("defect_ratio", 0.0) or 0.0)
 
         with self._lock:
+            silent = False
             if verdict == "OK":
+                # 好件不做任何机械臂动作：不排队、不写动作提示、不写事件，只累加放行计数
                 self.cell.stats.ok += 1
                 self.cell.stats.passed += 1
-                action, message = "pass", "OK，直接放行"
+                action, message = "pass", "OK，放行计数 +1"
+                silent = True
             elif verdict == "NG":
                 self.cell.stats.ng += 1
                 if self.mode != "auto":
@@ -113,8 +118,9 @@ class RobotController:
                 # 检测结果缺失或异常时不能当成 OK 放行，必须转人工
                 self.cell.stats.manual += 1
                 action, message = "invalid", "检测结果无效，转人工确认"
-            self.last_action = message
-            self._log("info" if action in ("pass", "queued") else "warning", message)
+            if not silent:
+                self.last_action = message
+                self._log("info" if action == "queued" else "warning", message)
             return {
                 "action": action,
                 "message": message,
@@ -142,8 +148,19 @@ class RobotController:
 
     def reset(self) -> None:
         with self._lock:
-            self.cell.reset()
+            # 手上还吸着件时不能就地松掉复位：先走到剔除箱放件，再回原点
+            holding = (self.state in ("GRIP", "LIFT", "TRANSFER", "PLACE")
+                       and bool(self.cell.pose.get("vacuum")) and self.cell.vacuum_ok)
             self.queue.clear()
+            if holding:
+                self.cell.fault = None
+                self.cell.estop = False
+                self.fault_reason = ""
+                self._recover_stage = "above"
+                self._move(BIN_ABOVE, "RECOVER")
+                self._log("warning", "复位请求：先带当前件走到剔除箱上方，放件后再回原点")
+                return
+            self.cell.reset()
             self.current = None
             self.state = "IDLE"
             self.fault_reason = ""
@@ -187,6 +204,10 @@ class RobotController:
                     self.current = None
                     self.state = "FAULT" if self.cell.fault else "IDLE"
                     self._timer = 0.0
+                return
+
+            if self.state == "RECOVER":
+                self._state_recover()
                 return
 
             if self._timer > self._cycle_timeout:
@@ -272,6 +293,34 @@ class RobotController:
             self.state = "IDLE"
             self._timer = 0.0
             self._log("info", "分拣完成，机械臂回到原点")
+
+    def _state_recover(self) -> None:
+        """复位前回收：先到剔除箱上方 → 下降放件 → 抬回上方 → 回原点完成复位。"""
+        if not self.cell.at_target():
+            return
+        stage = self._recover_stage
+        if stage == "above":
+            self._recover_stage = "down"
+            self._move(BIN_POS, "RECOVER")
+        elif stage == "down":
+            self.driver.write_pose(self.cell.pose, False)
+            self.cell.stats.sorted += 1
+            self.cell.reject_bin += 1
+            self.cell.part_present = False
+            self.last_action = f"已剔除 {self.current.part_id}" if self.current else "已剔除一件"
+            self._log("info", "复位前已到废料箱，松开吸盘放件")
+            self._recover_stage = "lift"
+            self._move(BIN_ABOVE, "RECOVER")
+        elif stage == "lift":
+            self._recover_stage = "home"
+            self._move(HOME, "RECOVER")
+        else:
+            self.current = None
+            self.cell.reset()
+            self.state = "IDLE"
+            self._timer = 0.0
+            self._recover_stage = "above"
+            self._log("info", "分拣单元已复位（队列与故障已清除，计数保留）")
 
     # ------------------------------------------------------------------ 辅助
     def _move(self, target: Dict[str, float], state: str) -> None:

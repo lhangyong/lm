@@ -18,3 +18,7 @@ metal_nut/
 *.log
 .DS_Store
 Thumbs.db
+
+# ===== 本地生成 / 不入库 =====
+deploy/
+python_exe.txt

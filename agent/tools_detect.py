@@ -53,7 +53,7 @@ def inspect_image(image_path: str, save_visualization: bool = True) -> str:
     """对单张本地图片做 PatchCore 缺陷检测，返回判级、异常分数、缺陷位置与可视化文件。
 
     Args:
-        image_path: 本机图片绝对路径，例如 E:\\Projects\\shixun\\jslm\\metal_nut\\test\\scratch\\000.png
+        image_path: 图片路径，绝对路径或相对仓库根目录，例如 metal_nut/test/scratch/000.png
         save_visualization: 是否保存叠加图/热力图/分数直方图
     """
     out_dir = _vis_dir() if save_visualization else None
@@ -66,7 +66,7 @@ def inspect_folder(folder: str, limit: int = 12, save_visualization: bool = Fals
     """对目录下图片批量检测，返回 NG 数量、不良率与逐张结果（适合整批抽检）。
 
     Args:
-        folder: 本机图片目录绝对路径，例如 E:\\Projects\\shixun\\jslm\\metal_nut\\test\\scratch
+        folder: 图片目录路径，绝对路径或相对仓库根目录，例如 metal_nut/test/scratch
         limit: 最多检测多少张（默认 12）
         save_visualization: 是否保存可视化文件（最多前 6 张）
     """

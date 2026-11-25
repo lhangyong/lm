@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 
 from langchain_core.tools import tool
 
-from patchcore_qc.config import MODEL_DIR, OUTPUT_ROOT, AppConfig
+from patchcore_qc.config import DATA_ROOT, MODEL_DIR, OUTPUT_ROOT, AppConfig
 from patchcore_qc.dataset import list_images
 from .tools_detect import pack
 
@@ -36,7 +36,7 @@ def _fmt_size(n: int) -> str:
 def list_datasets() -> str:
     """列出数据根目录下的数据集（MVTec 风格：train/good、test/*、ground_truth/*）。"""
     cfg = get_cfg()
-    root = Path(cfg.data.root) if cfg else Path(r"E:\Projects\shixun\jslm")
+    root = Path(cfg.data.root) if cfg else DATA_ROOT
     if not root.exists():
         return pack(f"数据根目录不存在: {root}", {"error": "no_data_root", "root": str(root)})
     datasets = []
@@ -64,7 +64,7 @@ def dataset_overview(dataset: str = "") -> str:
     import numpy as np
     cfg = get_cfg()
     name = dataset or (cfg.data.dataset if cfg else "metal_nut")
-    root = Path(cfg.data.root) if cfg else Path(r"E:\Projects\shixun\jslm")
+    root = Path(cfg.data.root) if cfg else DATA_ROOT
     base = root / name
     if not base.exists():
         return pack(f"数据集不存在: {base}（先用 list_datasets 查看）", {"error": "not_found", "path": str(base)})

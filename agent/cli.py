@@ -3,10 +3,10 @@
 用法::
 
     # 单图质检（生成 Markdown + HTML 报告）
-    python -m agent.cli "请检测 E:\\Projects\\shixun\\jslm\\metal_nut\\test\\scratch\\000.png 并出报告"
+    python -m agent.cli "请检测 metal_nut/test/scratch/000.png 并出报告"
 
     # 整批复检（目录）
-    python -m agent.cli "复检 E:\\Projects\\shixun\\jslm\\metal_nut\\test\\flip 这个目录，最多 8 张"
+    python -m agent.cli "复检 metal_nut/test/flip 这个目录，最多 8 张"
 
     # 问模型/评估情况
     python -m agent.cli "当前模型的 AUROC 和阈值是多少？"
@@ -73,6 +73,8 @@ def main(argv=None) -> int:
         print("\n========== 报告文件 ==========")
         print("Markdown:", final.get("report_path"))
         print("HTML    :", final.get("report_html"))
+        if final.get("report_docx"):
+            print("Word    :", final.get("report_docx"))
 
     if args.interactive or not args.request:
         print("输入质检请求（含图片/目录绝对路径），输入 q 退出。")

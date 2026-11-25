@@ -17,7 +17,7 @@ MODEL_DIR = OUTPUT_ROOT / "models"
 REPORT_DIR = OUTPUT_ROOT / "reports"
 RUN_DIR = OUTPUT_ROOT / "runs"
 VIS_DIR = OUTPUT_ROOT / "visualizations"
-DATA_ROOT = Path(os.environ.get("PATCHCORE_DATA_ROOT", r"E:\Projects\shixun\jslm"))
+DATA_ROOT = Path(os.environ.get("PATCHCORE_DATA_ROOT", PROJECT_ROOT))
 
 
 @dataclass

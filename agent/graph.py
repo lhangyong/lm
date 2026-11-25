@@ -58,7 +58,7 @@ SYSTEM_PROMPT = """你是一名工业视觉质检工程师，在操作 PatchCore
 1. 必须先调用工具拿到真实检测数据，禁止编造分数、缺陷区域、文件名或指标。
 2. 用户给出图片路径用 inspect_image；给出目录用 inspect_folder（必要时加 limit）；
    询问模型/数据集/评估情况用 list_models、dataset_overview、read_eval_report。
-3. 路径必须是本机绝对路径；不熟悉的路径先 list_datasets / dataset_overview 了解结构。
+3. 路径可以是绝对路径，也可以是相对仓库根目录的路径；不熟悉的路径先 list_datasets / dataset_overview 了解结构。
 4. 拿到数据后，用中文给出：判定 OK/NG、严重度、缺陷位置、处置建议（放行/隔离/拦截）。
 5. 不要编造百分比与因果解释。"""
 
@@ -99,6 +99,7 @@ class QCState(TypedDict, total=False):
     report_markdown: str
     report_html: str
     report_path: str
+    report_docx: str
     llm_status: Dict[str, Any]
     trace: Annotated[List[Dict[str, Any]], operator.add]
 
@@ -108,9 +109,15 @@ class AgentContext:
     cfg: AppConfig
     inspector: DefectInspector
     llm: Any = None
+    llm_plain: Any = None                     # 未绑定工具的原模型，供 reporter / JSON 计划使用
     status: LLMStatus = field(default_factory=LLMStatus)
     max_tool_rounds: int = 6
     report_dir: Path = REPORT_DIR
+
+    @property
+    def llm_for_text(self) -> Any:
+        """纯文本生成用的模型：优先未绑定工具的原始模型。"""
+        return self.llm_plain or self.llm
 
     @property
     def use_llm(self) -> bool:
@@ -122,6 +129,22 @@ _IMAGE_RE = re.compile(r'([A-Za-z]:\\[^\s"\'<>,;|*?]*?\.(?:png|jpg|jpeg|bmp|tif|
 _DIR_RE = re.compile(r'([A-Za-z]:\\[^\s"\'<>,;|*?]+)')
 _QUOTED_RE = re.compile(r'["“]([A-Za-z]:\\[^"”]+)["”]')
 IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _rel_candidates(text: str) -> List[str]:
+    """取出可能写成「相对仓库根目录」的路径，只保留真实存在的，统一转成绝对路径。"""
+    out = []
+    for tok in re.split(r'[\s"“”\'<>|,;]+', text):
+        tok = tok.strip("，。；：、()（）[]【】")
+        if not tok or tok.startswith("-") or ("/" not in tok and "\\" not in tok):
+            continue
+        if "://" in tok:                      # URL 不当作本地路径
+            continue
+        p = (_PROJECT_ROOT / tok.replace("\\", "/")).resolve()
+        if p.exists():
+            out.append(str(p))
+    return out
 
 
 def texts_of(msg: Any) -> str:
@@ -142,6 +165,10 @@ def extract_image_paths(text: str) -> List[str]:
         p = Path(c.strip())
         if p.is_file() and p.suffix.lower() in IMG_EXT:
             out.append(str(p))
+    for c in _rel_candidates(text):
+        p = Path(c)
+        if p.is_file() and p.suffix.lower() in IMG_EXT:
+            out.append(c)
     return list(dict.fromkeys(out))
 
 
@@ -151,6 +178,9 @@ def extract_folder_paths(text: str) -> List[str]:
         p = Path(c.strip().rstrip("\\"))
         if p.is_dir():
             out.append(str(p))
+    for c in _rel_candidates(text):
+        if Path(c).is_dir():
+            out.append(c)
     return list(dict.fromkeys(out))
 
 
@@ -234,7 +264,7 @@ def _fallback_execution(ctx: AgentContext, state: QCState, use_llm: bool) -> Dic
             dataset_dir=ctx.cfg.dataset_dir, train_dir=ctx.cfg.train_dir, test_dir=ctx.cfg.test_dir,
             request=state.get("request", ""))
         try:
-            resp = ctx.llm.invoke([HumanMessage(content=prompt)])
+            resp = ctx.llm_for_text.invoke([HumanMessage(content=prompt)])
             data = json.loads(_extract_json(texts_of(resp)))
             for c in (data.get("tool_calls") or [])[:6]:
                 if c.get("name") in TOOL_MAP:
@@ -268,16 +298,45 @@ def route_after_agent(ctx: AgentContext):
     return router
 
 
+def evidence_from_messages(msgs: Sequence[AnyMessage]) -> List[Dict[str, Any]]:
+    """原生 tool calling 模式下，工具结果只落在 ToolMessage 里，
+    state["evidence"] 不会被填充；这里按同一解析规则把 ToolMessage 还原成 evidence。"""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for m in msgs or []:
+        if getattr(m, "type", None) != "tool" and m.__class__.__name__ != "ToolMessage":
+            continue
+        name = getattr(m, "name", None) or "tool"
+        content = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False, default=str)
+        summary, payload = split_tool_output(content)
+        key = (name, summary[:120])
+        if key in seen:
+            continue
+        seen.add(key)
+        args = {}
+        if isinstance(payload, dict):
+            if payload.get("image_path"):
+                args = {"image_path": payload["image_path"]}
+            elif payload.get("folder"):
+                args = {"folder": payload["folder"]}
+        out.append({"tool": name, "args": args, "summary": summary, "payload": payload})
+    return out
+
+
 def make_reporter(ctx: AgentContext):
     def reporter(state: QCState) -> Dict[str, Any]:
         evidence = state.get("evidence") or []
+        if not evidence:
+            evidence = evidence_from_messages(state.get("inspector_messages") or [])
         items = collect_items(evidence)
         if ctx.use_llm and evidence:
             try:
                 prompt = SUMMARY_PROMPT.format(evidence=digest(evidence), request=state.get("request", ""))
-                resp = ctx.llm.invoke([SystemMessage(content="你是严谨的工业质检工程师，只依据给定数据作答。"),
-                                       HumanMessage(content=prompt)])
-                analysis = texts_of(resp)
+                resp = ctx.llm_for_text.invoke([SystemMessage(content="你是严谨的工业质检工程师，只依据给定数据作答。"),
+                                                HumanMessage(content=prompt)])
+                analysis = texts_of(resp).strip()
+                if not analysis:      # 模型返回空正文（例如只给了思考内容）时退回确定性模板
+                    analysis = template_analysis(items, evidence)
             except Exception as e:
                 analysis = f"（LLM 解读失败：{str(e)[:100]}）\n\n" + template_analysis(items, evidence)
         else:
@@ -290,7 +349,8 @@ def make_reporter(ctx: AgentContext):
 
 def make_render(ctx: AgentContext):
     def render(state: QCState) -> Dict[str, Any]:
-        return {"trace": [{"node": "render", "report": state.get("report_path")}]}
+        return {"trace": [{"node": "render", "report": state.get("report_path"),
+                           "docx": state.get("report_docx") or ""}]}
     return render
 
 
@@ -430,7 +490,17 @@ def write_reports(ctx: AgentContext, items: List[Dict[str, Any]], analysis: str)
     md_path, html_path = base / f"{stem}.md", base / f"{stem}.html"
     md_path.write_text(md, encoding="utf-8")
     html_path.write_text(html_text, encoding="utf-8")
-    return {"report_markdown": md, "report_path": str(md_path), "report_html": str(html_path)}
+    out = {"report_markdown": md, "report_path": str(md_path), "report_html": str(html_path)}
+    if len(items) == 1:
+        # 单图同时导出 Word（.docx）：CLI 与网页导出保持同一套报告内容
+        docx_path = base / f"{stem}.docx"
+        try:
+            report_render.render_docx(item, meta=meta, analysis=analysis, base=base,
+                                      out_path=docx_path)
+            out["report_docx"] = str(docx_path)
+        except Exception as e:  # 缺 python-docx 等不影响 md/html 主流程
+            print(f"[warn] Word 报告生成失败：{type(e).__name__}: {e}")
+    return out
 
 
 # ================================================================ 编译与入口
@@ -467,7 +537,8 @@ class QCAgent:
         bundle = build_llm(self.cfg.agent, ALL_TOOLS)
         self.status: LLMStatus = bundle.status
         self.ctx = AgentContext(cfg=self.cfg, inspector=self.inspector, llm=bundle.llm,
-                                status=bundle.status, max_tool_rounds=self.cfg.agent.max_tool_rounds)
+                                llm_plain=bundle.raw, status=bundle.status,
+                                max_tool_rounds=self.cfg.agent.max_tool_rounds)
         self.graph = build_graph(self.ctx)
         if self.verbose:
             if self.status.enabled:

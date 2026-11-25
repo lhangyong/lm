@@ -43,8 +43,9 @@ report:
   region_core_percentile: 88.0  # 归一化热力图上的核心阈值百分位
 
 agent:
-  provider: "auto"              # deepseek | openai | qwen | ollama | none
-  model: ""                     # 空 = 用 provider 默认模型（如 deepseek-chat）
+  provider: "deepseek"          # deepseek | openai | qwen | ollama | none
+  # deepseek 官方模型：deepseek-v4-flash（推荐）；备选 deepseek-v4-pro / deepseek-chat / deepseek-flash
+  model: "deepseek-v4-flash"    # 空 = 用 provider 默认模型（如 deepseek-chat）
   temperature: 0.1
   max_tool_rounds: 6
   recursion_limit: 24

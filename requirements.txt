@@ -1,5 +1,5 @@
 # PatchCore 无监督缺陷检测 + LangGraph 智能体质检
-# 已验证环境：Python 3.10，Windows + CUDA 12.6（D:\anconda\envs\yolov8-gpu）
+# 已验证环境：Python 3.10，Windows + CUDA 12.6
 torch>=2.2
 torchvision>=0.17
 numpy>=1.24

@@ -6,7 +6,7 @@ from agent import create_agent
 
 cfg = load_config()
 agent = create_agent(cfg)                       # 自动读取 DEEPSEEK_API_KEY 等环境变量
-final = agent.run(r"请检测 E:\Projects\shixun\jslm\metal_nut\test\bent\000.png 并出具质检报告")
+final = agent.run(r"请检测 metal_nut/test/bent/000.png 并出具质检报告")
 
 print(final["analysis"])        # 大模型（或规则模板）写的质检解读
 print(final["report_path"])     # outputs/reports/qc_000_xxx.md

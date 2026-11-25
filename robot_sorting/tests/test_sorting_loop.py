@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """机械臂分拣闭环验收：NG 剔除、OK 放行、急停、监控模式、真空故障。
 
-跑法：D:\\anconda\\envs\\yolov8-gpu\\python.exe -m unittest robot_sorting.tests.test_sorting_loop -v
+跑法：python -m unittest robot_sorting.tests.test_sorting_loop -v
 """
 from __future__ import annotations
 

@@ -46,6 +46,7 @@ class LLMStatus:
 class LLMBundle:
     llm: Any = None
     status: LLMStatus = None
+    raw: Any = None      # 未 bind_tools 的原始模型：写解读类纯文本时必须用它
 
 
 def resolve_provider(cfg: AgentConfig) -> tuple[str, Optional[str], str, Optional[str]]:
@@ -99,12 +100,12 @@ def build_llm(cfg: AgentConfig, tools: Optional[List[Any]] = None) -> LLMBundle:
             bound = llm.bind_tools(tools)
             bound.invoke  # noqa: B018 - 仅确认返回对象可用
             status.tools = True
-            return LLMBundle(bound, status)
+            return LLMBundle(bound, status, raw=llm)
         except Exception as e:
             status.error = str(e)[:200]
     elif tools:
         status.error = "该模型不支持 function calling，改用 JSON 计划模式"
-    return LLMBundle(llm, status)
+    return LLMBundle(llm, status, raw=llm)
 
 
 def _try_init(cls, kwargs: Dict[str, Any]):

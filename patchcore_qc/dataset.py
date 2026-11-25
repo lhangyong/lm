@@ -1,6 +1,6 @@
 """MVTec-AD 风格数据集读取与预处理。
 
-目录结构（本机数据 E:\\Projects\\shixun\\jslm\\metal_nut）::
+目录结构（数据根目录下的 metal_nut/）::
 
     metal_nut/
         train/good/*.png                 无缺陷训练图

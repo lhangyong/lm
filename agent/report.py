@@ -58,10 +58,8 @@ def render_result_fragments(item: Dict, base: Path) -> Dict[str, str]:
     overlay_url = _url(visuals.get("overlay_png"))
     overlay = ""
     if overlay_url:
-        cap = ("异常叠加（白边为缺陷轮廓，彩色框为检出区域）" if item.get("regions")
-               else "异常叠加（未检出缺陷区域）")
-        overlay = (f'<figure><img src="{html.escape(overlay_url)}" alt="overlay"/>'
-                   f'<figcaption>{cap}</figcaption></figure>')
+        overlay = (f'<figure class="overlay"><img src="{html.escape(overlay_url)}" alt="overlay"/>'
+                   f'</figure>')
     svgs = []
     for key, cap in (("heatmap_svg", "PatchCore 热力图"), ("hist_svg", "patch 异常分数分布")):
         p = visuals.get(key)
@@ -75,8 +73,18 @@ def render_result_fragments(item: Dict, base: Path) -> Dict[str, str]:
         for i, r in enumerate(item.get("regions", [])))
     table = (f'<table><thead><tr><th>#</th><th>位置</th><th>面积占比</th><th>显著性</th><th>级别</th></tr>'
              f'</thead><tbody>{rows}</tbody></table>') if rows else ""
+    regions = item.get("regions") or []
+    overlay_caption = ""
+    if item.get("verdict") == "NG" and regions:
+        top = max(regions, key=lambda r: float(r.get("area_ratio", 0)))
+        loc = top.get("location_detail") or top.get("location", "")
+        overlay_caption = (f'检出 {len(regions)} 处疑似缺陷：{loc}，'
+                           f'面积 {float(top.get("area_ratio", 0)):.1%}，{top.get("severity", "")}')
+    elif item.get("verdict") == "NG":
+        overlay_caption = "检出异常，未定位到明确区域"
     return {
         "overlay": overlay,
+        "overlay_caption": html.escape(overlay_caption),
         "svgs": "".join(svgs),
         "regions": table,
         "summary": f'{verdict_badge(item.get("verdict", "OK"))} '
