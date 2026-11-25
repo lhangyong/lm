@@ -29,3 +29,4 @@ deploy/**/*.npz
 deploy/**/*.zip
 deploy/**/calib_images/
 deploy/**/SHA256SUMS.txt
+!deploy/nut_onnx_20261125/board-cpp/memory_bank.bin
